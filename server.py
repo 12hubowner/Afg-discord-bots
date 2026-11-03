@@ -8,18 +8,18 @@ from aiohttp_session.cookie_storage import EncryptedCookieStorage
 import db
 
 # ==========================================
-# SECURE CONFIGURATION (Reads from Render Env)
+# SECURE CONFIGURATION
 # ==========================================
 API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 PORT = int(os.environ.get("PORT", 8080))
 
-# These must be set in Render -> Environment
 DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID")
 DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET")
 DISCORD_REDIRECT_URI = "https://afg-discord-bots.onrender.com/callback"
 
 # ==========================================
-
+# API & LOADER HANDLERS (Keep as is)
+# ==========================================
 def load_script_body() -> str:
     try:
         with open("scripts/main.lua", "r") as f:
@@ -92,13 +92,11 @@ async def handle_loader(request: web.Request) -> web.Response:
         return web.Response(text="-- loader missing.", status=404)
 
 # ==========================================
-# DISCORD OAUTH2 ROUTES
+# OAUTH & DASHBOARD API
 # ==========================================
-
 async def handle_login(request):
     if not DISCORD_CLIENT_ID:
-        return web.Response(text="Server configuration error: Missing DISCORD_CLIENT_ID in Render environment.", status=500)
-        
+        return web.Response(text="Server configuration error: Missing Client ID", status=500)
     url = (
         f"https://discord.com/api/oauth2/authorize"
         f"?client_id={DISCORD_CLIENT_ID}"
@@ -124,7 +122,7 @@ async def handle_callback(request):
     async with ClientSession() as session:
         async with session.post("https://discord.com/api/oauth2/token", data=data, headers=headers) as resp:
             if resp.status != 200:
-                return web.Response(text="Failed to get token. Check your Discord Client Secret in Render Environment Variables.", status=400)
+                return web.Response(text="Failed to get token.", status=400)
             token_data = await resp.json()
 
         headers = {"Authorization": f"Bearer {token_data['access_token']}"}
@@ -136,16 +134,12 @@ async def handle_callback(request):
     session["username"] = user_data["username"]
     session["avatar"] = user_data.get("avatar", "")
 
-    raise web.HTTPFound("/")
+    raise web.HTTPFound("/dashboard")
 
 async def handle_logout(request):
     session = await get_session(request)
     session.invalidate()
     raise web.HTTPFound("/")
-
-# ==========================================
-# DASHBOARD API
-# ==========================================
 
 async def api_me(request):
     session = await get_session(request)
@@ -177,20 +171,24 @@ async def api_me(request):
     })
 
 # ==========================================
-# WEBSITE ROUTES
+# WEBSITE PAGES
 # ==========================================
-
 async def handle_index(request):
     return web.FileResponse('./public/index.html')
 
+async def handle_dashboard(request):
+    return web.FileResponse('./public/dashboard.html')
+
 async def handle_css(request):
     return web.FileResponse('./public/style.css')
+
+async def handle_dash_css(request):
+    return web.FileResponse('./public/dashboard.css')
 
 async def start_server():
     await db.init_db()
     app = web.Application()
     
-    # Secure random key for session cookies
     secret_key = base64.urlsafe_b64decode(base64.b64encode(secrets.token_bytes(32)))
     setup_session(app, EncryptedCookieStorage(secret_key))
 
@@ -204,9 +202,11 @@ async def start_server():
     app.router.add_get("/callback", handle_callback)
     app.router.add_get("/logout", handle_logout)
 
-    # Website
+    # Pages
     app.router.add_get("/", handle_index)
+    app.router.add_get("/dashboard", handle_dashboard)
     app.router.add_get("/style.css", handle_css)
+    app.router.add_get("/dashboard.css", handle_dash_css)
     
     runner = web.AppRunner(app)
     await runner.setup()
