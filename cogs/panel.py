@@ -18,7 +18,7 @@ def is_owner():
     return app_commands.check(predicate)
 
 # ==========================================
-# REDEEM MODAL (For Paid Users)
+# REDEEM MODAL (Paid Users Only)
 # ==========================================
 class RedeemModal(discord.ui.Modal, title="Redeem a key"):
     key_input = discord.ui.TextInput(
@@ -42,7 +42,6 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
             await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
             return
 
-        # Auto assign buyer role if configured
         role_id_str = await db.get_setting("buyer_role_id")
         if role_id_str:
             role = interaction.guild.get_role(int(role_id_str))
@@ -55,19 +54,91 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
         await interaction.response.send_message("✅ Key redeemed successfully! You can now click **Get Paid Script**.", ephemeral=True)
 
 # ==========================================
-# PANEL VIEW
+# FREE PANEL (No Redeem Button)
 # ==========================================
-class PanelView(discord.ui.View):
+class FreePanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Redeem Key", style=discord.ButtonStyle.success, emoji="🔑", custom_id="panel:redeem", row=0)
+    @discord.ui.button(label="Get Script", style=discord.ButtonStyle.primary, emoji="📜", custom_id="panel:free_getscript", row=0)
+    async def get_free(self, interaction: discord.Interaction, button: discord.ui.Button):
+        free_paused = await db.get_setting("free_paused", "0")
+        if free_paused == "1":
+            return await interaction.response.send_message("⏸️ The **Free Script** is currently paused by the owner.", ephemeral=True)
+
+        if not os.path.exists("free_loader.lua"):
+            return await interaction.response.send_message("❌ The free script has not been uploaded yet.", ephemeral=True)
+
+        loadstring_payload = (
+            f'script_key = "FREE_USER"\n'
+            f'local req = (syn and syn.request) or (http and http.request) or http_request or request\n'
+            f'local res = req({{Url = "https://afg-discord-bots.onrender.com/free_loader", Method = "GET", Headers = {{["X-Keyhub-Secret"] = "keyhub_9f3a8c7e2b1d4056_do_not_share"}}}})\n'
+            f'loadstring(res.Body)()'
+        )
+        
+        try:
+            await interaction.user.send(f"**Your Free Script:**\n```lua\n{loadstring_payload}\n```")
+            await interaction.response.send_message("✅ Free script sent to your DMs.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I can't DM you. Enable DMs.", ephemeral=True)
+
+    @discord.ui.button(label="Get Role", style=discord.ButtonStyle.secondary, emoji="👤", custom_id="panel:free_getrole", row=0)
+    async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role_id_str = await db.get_setting("buyer_role_id")
+        if not role_id_str: 
+            return await interaction.response.send_message("❌ Role not configured.", ephemeral=True)
+        
+        role = interaction.guild.get_role(int(role_id_str))
+        if not role: 
+            return await interaction.response.send_message("❌ Role not found.", ephemeral=True)
+
+        row = await db.get_user_key(interaction.user.id)
+        if not row or row["blacklisted"]:
+            return await interaction.response.send_message("❌ You need to purchase access first!", ephemeral=True)
+
+        try:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Role {role.mention} assigned.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to give that role.", ephemeral=True)
+
+    @discord.ui.button(label="Reset HWID", style=discord.ButtonStyle.secondary, emoji="⚙️", custom_id="panel:free_resethwid", row=1)
+    async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ok = await db.reset_hwid(interaction.user.id)
+        if ok: await interaction.response.send_message("✅ HWID reset.", ephemeral=True)
+        else: await interaction.response.send_message("❌ No paid key found to reset.", ephemeral=True)
+
+    @discord.ui.button(label="Get Stats", style=discord.ButtonStyle.secondary, emoji="📊", custom_id="panel:free_getstats", row=1)
+    async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        row = await db.get_user_key(interaction.user.id)
+        if not row: 
+            return await interaction.response.send_message("❌ No key found. You are on the Free tier.", ephemeral=True)
+        
+        hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
+        expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
+        is_paused = await db.get_setting("paid_paused", "0")
+        status = "Paused" if is_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
+
+        embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
+        embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
+        embed.add_field(name="Status", value=status)
+        embed.add_field(name="Expires", value=expires)
+        embed.add_field(name="HWID", value=hwid_status)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==========================================
+# PAID PANEL (Includes Redeem Button)
+# ==========================================
+class PaidPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Redeem Key", style=discord.ButtonStyle.success, emoji="🔑", custom_id="panel:paid_redeem", row=0)
     async def redeem(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_modal(RedeemModal())
 
-    @discord.ui.button(label="Get Paid Script", style=discord.ButtonStyle.primary, emoji="💎", custom_id="panel:getpaid", row=0)
+    @discord.ui.button(label="Get Script", style=discord.ButtonStyle.primary, emoji="📜", custom_id="panel:paid_getscript", row=0)
     async def get_paid(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if Paid is paused
         paid_paused = await db.get_setting("paid_paused", "0")
         if paid_paused == "1":
             return await interaction.response.send_message("⏸️ The **Paid Script** is currently paused by the owner.", ephemeral=True)
@@ -97,48 +168,42 @@ class PanelView(discord.ui.View):
         except discord.Forbidden:
             await interaction.response.send_message("❌ I can't DM you. Enable DMs.", ephemeral=True)
 
-    @discord.ui.button(label="Get Free Script", style=discord.ButtonStyle.secondary, emoji="📜", custom_id="panel:getfree", row=0)
-    async def get_free(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if Free is paused
-        free_paused = await db.get_setting("free_paused", "0")
-        if free_paused == "1":
-            return await interaction.response.send_message("⏸️ The **Free Script** is currently paused by the owner.", ephemeral=True)
-
-        if not os.path.exists("free_loader.lua"):
-            return await interaction.response.send_message("❌ The free script has not been uploaded yet.", ephemeral=True)
-
-        loadstring_payload = (
-            f'script_key = "FREE_USER"\n'
-            f'local req = (syn and syn.request) or (http and http.request) or http_request or request\n'
-            f'local res = req({{Url = "https://afg-discord-bots.onrender.com/free_loader", Method = "GET", Headers = {{["X-Keyhub-Secret"] = "keyhub_9f3a8c7e2b1d4056_do_not_share"}}}})\n'
-            f'loadstring(res.Body)()'
-        )
+    @discord.ui.button(label="Get Role", style=discord.ButtonStyle.secondary, emoji="👤", custom_id="panel:paid_getrole", row=0)
+    async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role_id_str = await db.get_setting("buyer_role_id")
+        if not role_id_str: 
+            return await interaction.response.send_message("❌ Role not configured.", ephemeral=True)
         
-        try:
-            await interaction.user.send(f"**Your Free Script:**\n```lua\n{loadstring_payload}\n```")
-            await interaction.response.send_message("✅ Free script sent to your DMs.", ephemeral=True)
-        except discord.Forbidden:
-            await interaction.response.send_message("❌ I can't DM you. Enable DMs.", ephemeral=True)
+        role = interaction.guild.get_role(int(role_id_str))
+        if not role: 
+            return await interaction.response.send_message("❌ Role not found.", ephemeral=True)
 
-    @discord.ui.button(label="Reset HWID", style=discord.ButtonStyle.secondary, emoji="⚙️", custom_id="panel:resethwid", row=1)
+        row = await db.get_user_key(interaction.user.id)
+        if not row or row["blacklisted"]:
+            return await interaction.response.send_message("❌ You need a paid key first!", ephemeral=True)
+
+        try:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Role {role.mention} assigned.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to give that role.", ephemeral=True)
+
+    @discord.ui.button(label="Reset HWID", style=discord.ButtonStyle.secondary, emoji="⚙️", custom_id="panel:paid_resethwid", row=1)
     async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
         ok = await db.reset_hwid(interaction.user.id)
-        if ok: 
-            await interaction.response.send_message("✅ HWID reset.", ephemeral=True)
-        else: 
-            await interaction.response.send_message("❌ No paid key found to reset.", ephemeral=True)
+        if ok: await interaction.response.send_message("✅ HWID reset.", ephemeral=True)
+        else: await interaction.response.send_message("❌ No paid key found to reset.", ephemeral=True)
 
-    @discord.ui.button(label="Get Stats", style=discord.ButtonStyle.secondary, emoji="📊", custom_id="panel:getstats", row=1)
+    @discord.ui.button(label="Get Stats", style=discord.ButtonStyle.secondary, emoji="📊", custom_id="panel:paid_getstats", row=1)
     async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
         row = await db.get_user_key(interaction.user.id)
         if not row: 
-            return await interaction.response.send_message("❌ No key found. You are on the Free tier.", ephemeral=True)
+            return await interaction.response.send_message("❌ No key found.", ephemeral=True)
         
         hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
         expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
-        
-        paid_paused = await db.get_setting("paid_paused", "0")
-        status = "Paused" if paid_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
+        is_paused = await db.get_setting("paid_paused", "0")
+        status = "Paused" if is_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
 
         embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
         embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
@@ -162,7 +227,7 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message(msg, ephemeral=True)
 
-    @app_commands.command(name="setup_role", description="Pick the role the panel will give out to paid users")
+    @app_commands.command(name="setup_role", description="Pick the role the panel will give out")
     @is_owner()
     async def setup_role(self, interaction: discord.Interaction, role: discord.Role):
         await db.set_setting("buyer_role_id", str(role.id))
@@ -188,18 +253,33 @@ class Panel(commands.Cog):
             with open("free_loader.lua", "wb") as f: 
                 f.write(await free_loader.read())
 
-        embed = discord.Embed(
-            title="Afg Control Panel", 
-            description=(
-                "This control panel is for the project: **Afg Joiner**\n"
-                "Redeem your key for the Paid script, or get the Free script below."
-            ), 
-            color=discord.Color.from_rgb(240, 160, 0)
-        )
-        embed.set_footer(text=f"Sent by {interaction.user.display_name}")
-        
-        await interaction.response.send_message(embed=embed, view=PanelView())
-        await interaction.followup.send(f"✅ Panel posted.", ephemeral=True)
+        # Post Free Panel
+        if free_loader:
+            embed_free = discord.Embed(
+                title="Afg Control Panel", 
+                description=(
+                    "This control panel is for the project: **Afg Joiner**\n"
+                    "Click below to get the script or get your role"
+                ), 
+                color=discord.Color.from_rgb(240, 160, 0)
+            )
+            embed_free.set_footer(text=f"Sent by {interaction.user.display_name}")
+            await interaction.channel.send(embed=embed_free, view=FreePanelView())
+
+        # Post Paid Panel
+        if paid_loader:
+            embed_paid = discord.Embed(
+                title="Afg Control Panel", 
+                description=(
+                    "This control panel is for the project: **Afg Joiner**\n"
+                    "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role"
+                ), 
+                color=discord.Color.from_rgb(240, 160, 0)
+            )
+            embed_paid.set_footer(text=f"Sent by {interaction.user.display_name}")
+            await interaction.channel.send(embed=embed_paid, view=PaidPanelView())
+
+        await interaction.response.send_message("✅ Panels posted.", ephemeral=True)
 
     @app_commands.command(name="say", description="Make the bot say a message in the channel")
     @is_owner()
@@ -374,4 +454,6 @@ class Panel(commands.Cog):
 
 async def setup(bot):
     bot.add_view(PanelView())
+    bot.add_view(FreePanelView())
+    bot.add_view(PaidPanelView())
     await bot.add_cog(Panel(bot))
