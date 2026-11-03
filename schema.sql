@@ -17,11 +17,3 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
-
-CREATE TABLE IF NOT EXISTS projects (
-    name          TEXT PRIMARY KEY,
-    api_key       TEXT,
-    manager_role  INTEGER,
-    buyer_role    INTEGER,
-    loader_script TEXT
-);
