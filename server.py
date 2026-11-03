@@ -3,15 +3,9 @@ import os
 from aiohttp import web
 import db
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
 API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 PORT = int(os.environ.get("PORT", 8080))
 
-# ==========================================
-# HELPER FUNCTIONS
-# ==========================================
 def load_script_body() -> str:
     try:
         with open("scripts/main.lua", "r") as f:
@@ -29,9 +23,6 @@ LRM_ScriptName = "keyhub"
 """
     return header + "\n" + load_script_body()
 
-# ==========================================
-# API HANDLERS
-# ==========================================
 async def handle_load(request: web.Request) -> web.Response:
     try:
         data = await request.json()
@@ -77,9 +68,6 @@ async def handle_load(request: web.Request) -> web.Response:
         "seconds_left": seconds_left,
     })
 
-# ==========================================
-# SECURE LOADER ROUTES
-# ==========================================
 async def handle_paid_loader(request: web.Request) -> web.Response:
     secret = request.query.get("secret")
     if secret != API_SECRET:
@@ -90,37 +78,16 @@ async def handle_paid_loader(request: web.Request) -> web.Response:
     except FileNotFoundError:
         return web.Response(text="-- paid loader missing.", status=404)
 
-async def handle_free_loader(request: web.Request) -> web.Response:
-    secret = request.query.get("secret")
-    if secret != API_SECRET:
-        return web.Response(text="403 Forbidden", status=403)
-    try:
-        with open("free_loader.lua", "r") as f:
-            return web.Response(text=f.read(), content_type="text/plain")
-    except FileNotFoundError:
-        return web.Response(text="-- free loader missing.", status=404)
-
-# ==========================================
-# START SERVER (This was missing!)
-# ==========================================
 async def start_server():
-    # Initialize the database tables
     await db.init_db()
-    
-    # Create the web app
     app = web.Application()
     
-    # Add the routes
     app.router.add_post("/load", handle_load)
     app.router.add_get("/paid_loader", handle_paid_loader)
-    app.router.add_get("/free_loader", handle_free_loader)
     
-    # Start the server
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     print(f"[server] listening on :{PORT}")
-    
-    # Return the runner so bot.py can clean it up later
     return runner
