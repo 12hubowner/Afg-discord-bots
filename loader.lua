@@ -3,7 +3,10 @@ local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 
-local API_URL = "https://afg-bot.onrender.com/load"
+-- ==========================================
+-- UPDATED RENDER URL
+-- ==========================================
+local API_URL = "https://afg-discord-bots.onrender.com/load"
 local API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 
 local function get_hwid()
@@ -30,11 +33,24 @@ end
 
 local hwid = get_hwid()
 
-local res, err = http_post(API_URL, {
-    secret = API_SECRET,
-    key = script_key or "",
-    hwid = hwid,
-})
+-- Retry loop (tries 3 times if the server is sleeping/starting up)
+local res, err
+for i = 1, 3 do
+    res, err = http_post(API_URL, {
+        secret = API_SECRET,
+        key = script_key or "",
+        hwid = hwid,
+    })
+    
+    if res and res.StatusCode == 200 then
+        break -- Success, stop retrying
+    elseif res and res.StatusCode == 503 then
+        warn("[keyhub] Server is booting up (503). Retrying in 5 seconds...")
+        task.wait(5)
+    else
+        break -- Actual error (invalid key, etc.), stop retrying
+    end
+end
 
 if not res then
     warn("[keyhub] network error: " .. tostring(err))
