@@ -69,9 +69,6 @@ async def handle_load(request: web.Request) -> web.Response:
     })
 
 async def handle_paid_loader(request: web.Request) -> web.Response:
-    secret = request.query.get("secret")
-    if secret != API_SECRET:
-        return web.Response(text="403 Forbidden", status=403)
     try:
         with open("paid_loader.lua", "r") as f:
             return web.Response(text=f.read(), content_type="text/plain")
