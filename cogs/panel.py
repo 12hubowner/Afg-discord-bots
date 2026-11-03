@@ -122,7 +122,8 @@ class PanelView(discord.ui.View):
         
         hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
         expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
-        status = "Paused" if await db.get_setting("system_paused", "0") == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
+        is_paused = await db.get_setting("system_paused", "0")
+        status = "Paused" if is_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
 
         embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
         embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
@@ -177,45 +178,54 @@ class Panel(commands.Cog):
         await interaction.response.send_message("✅ Message sent.", ephemeral=True)
         await interaction.channel.send(text)
 
-    # --- PAUSE / RESUME TIMERS ---
-    @app_commands.command(name="togglepanel", description="Pause or resume all keys (kicks users and freezes timers)")
+    # --- PAUSE TIMERS ---
+    @app_commands.command(name="pause", description="Pause all keys, kick active users, and freeze timers")
     @is_owner()
-    async def togglepanel(self, interaction: discord.Interaction):
+    async def pause(self, interaction: discord.Interaction):
         is_paused = await db.get_setting("system_paused", "0")
+        if is_paused == "1":
+            return await interaction.response.send_message("❌ System is already paused.", ephemeral=True)
+            
+        await db.set_setting("system_paused", "1")
+        await db.set_setting("pause_time", str(int(time.time())))
         
+        embed = discord.Embed(
+            title="⏸️ SYSTEM PAUSED", 
+            description="All keys have been frozen. Active users will be kicked momentarily.", 
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed)
+        await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
+
+    # --- UNPAUSE TIMERS ---
+    @app_commands.command(name="unpause", description="Unpause keys and compensate users for downtime")
+    @is_owner()
+    async def unpause(self, interaction: discord.Interaction):
+        is_paused = await db.get_setting("system_paused", "0")
         if is_paused == "0":
-            await db.set_setting("system_paused", "1")
-            await db.set_setting("pause_time", str(int(time.time())))
+            return await interaction.response.send_message("❌ System is already running.", ephemeral=True)
             
-            embed = discord.Embed(
-                title="⏸️ SYSTEM PAUSED", 
-                description="All keys have been frozen. Active users will be kicked.", 
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed)
-            await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
-        else:
-            pause_time_str = await db.get_setting("pause_time", str(int(time.time())))
-            down_duration = int(time.time()) - int(pause_time_str)
-            await db.set_setting("system_paused", "0")
-            
-            conn = sqlite3.connect(db.DB_PATH)
-            c = conn.cursor()
-            c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (down_duration,))
-            conn.commit()
-            conn.close()
-            
-            m, s = divmod(down_duration, 60)
-            h, m = divmod(m, 60)
-            duration_str = f"{h}h {m}m {s}s"
-            
-            embed = discord.Embed(
-                title="▶️ SYSTEM RESUMED", 
-                description=f"Keys are active. All users received `{duration_str}` added to their timer.", 
-                color=discord.Color.green()
-            )
-            await interaction.response.send_message(embed=embed)
-            await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
+        pause_time_str = await db.get_setting("pause_time", str(int(time.time())))
+        down_duration = int(time.time()) - int(pause_time_str)
+        await db.set_setting("system_paused", "0")
+        
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (down_duration,))
+        conn.commit()
+        conn.close()
+        
+        m, s = divmod(down_duration, 60)
+        h, m = divmod(m, 60)
+        duration_str = f"{h}h {m}m {s}s"
+        
+        embed = discord.Embed(
+            title="▶️ SYSTEM RESUMED", 
+            description=f"Keys are active. All users received `{duration_str}` added to their timer.", 
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed)
+        await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
 
     # --- WHITELIST ---
     @app_commands.command(name="whitelist", description="Whitelists a user")
