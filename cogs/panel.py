@@ -76,8 +76,8 @@ class PaidPanelView(discord.ui.View):
         if not os.path.exists("paid_loader.lua"):
             return await interaction.response.send_message("❌ The script has not been uploaded yet.", ephemeral=True)
 
-        # THIS IS THE EXACT 2 LINES YOU WANTED
-        script_text = f'script_key = "{row["key"]}"\nloadstring(game:HttpGet("https://afg-bot.onrender.com/paid_loader?secret=keyhub_9f3a8c7e2b1d4056_do_not_share"))()'
+        # EXACTLY THE 2 LINES YOU WANTED
+        script_text = f'script_key = "{row["key"]}"\nloadstring(game:HttpGet("https://afg-bot.onrender.com/paid_loader"))()'
         
         try:
             await interaction.user.send(f"```lua\n{script_text}\n```")
