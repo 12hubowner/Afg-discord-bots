@@ -4,9 +4,6 @@ import discord
 from discord.ext import commands
 import server
 
-# ==========================================
-# Token is pulled securely from Render
-# ==========================================
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 OWNER_ID = 1456353767606849628
 
@@ -20,25 +17,18 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     try:
-        # Syncing slash commands globally
         synced = await bot.tree.sync()
         print(f"[bot] synced {len(synced)} slash commands")
     except Exception as e:
         print(f"[bot] sync failed: {e}")
 
 async def main():
-    # Start the web server for the Lua loader API and Render health checks
     runner = await server.start_server()
-    
     async with bot:
-        # Load the panel commands
         await bot.load_extension("cogs.panel")
-        
         try:
-            # Start the bot
             await bot.start(DISCORD_TOKEN)
         finally:
-            # Clean up web server if bot stops
             await runner.cleanup()
 
 if __name__ == "__main__":
