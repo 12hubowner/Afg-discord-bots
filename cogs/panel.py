@@ -6,6 +6,7 @@ import db
 import sqlite3
 
 OWNER_ID = 1456353767606849628
+LOG_CHANNEL_ID = 1566537524803928184 # The channel where logs are sent
 
 def is_owner():
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -192,6 +193,7 @@ class Panel(commands.Cog):
         await interaction.response.send_message("✅ Message sent.", ephemeral=True)
         await interaction.channel.send(text)
 
+    # --- PAUSE / RESUME TIMERS ---
     @app_commands.command(name="pause", description="Pause all keys, kick active users, and freeze timers")
     @is_owner()
     async def pause(self, interaction: discord.Interaction):
@@ -208,7 +210,13 @@ class Panel(commands.Cog):
             color=discord.Color.red()
         )
         await interaction.response.send_message(embed=embed)
-        await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
+        
+        # Send log to the specific channel
+        log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
+        else:
+            await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
 
     @app_commands.command(name="unpause", description="Unpause keys and compensate users for downtime")
     @is_owner()
@@ -237,8 +245,15 @@ class Panel(commands.Cog):
             color=discord.Color.green()
         )
         await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
+        
+        # Send log to the specific channel
+        log_channel = self.bot.get_channel(LOG_CHANNEL_ID)
+        if log_channel:
+            await log_channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
+        else:
+            await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
 
+    # --- WHITELIST ---
     @app_commands.command(name="whitelist", description="Whitelists a user")
     @is_owner()
     async def whitelist(self, interaction: discord.Interaction, member: discord.Member, days: int = 0):
