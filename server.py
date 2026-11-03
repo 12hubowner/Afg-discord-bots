@@ -1,84 +1,74 @@
-import time
-import os
-from aiohttp import web
-import db
+-- keyhub loader — paste into Delta Executor
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
 
-API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
-PORT = int(os.environ.get("PORT", 8080))
+local API_URL = "https://afg-discord-bots.onrender.com/load"
+local API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 
-def load_script_body() -> str:
-    try:
-        with open("scripts/main.lua", "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return '-- no script body configured'
+local function get_hwid()
+    return (syn and syn.get_hwid and syn.get_hwid())
+        or (gethwid and gethwid())
+        or (get_hwid and get_hwid())
+        or "UNKNOWN"
+end
 
-def build_script(row, seconds_left: int) -> str:
-    header = f"""-- LRM runtime vars
-LRM_IsUserPremium = true
-LRM_SecondsLeft = {seconds_left}
-LRM_LinkedDiscordID = "{row['discord_id']}"
-LRM_ScriptName = "keyhub"
--- end LRM
-"""
-    return header + "\n" + load_script_body()
+local function http_post(url, body)
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return nil, "executor has no http request" end
+    local ok, res = pcall(function()
+        return req({
+            Url = url,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = HttpService:JSONEncode(body),
+        })
+    end)
+    if not ok then return nil, tostring(res) end
+    return res
+end
 
-async def handle_load(request: web.Request) -> web.Response:
-    try:
-        data = await request.json()
-    except Exception:
-        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+local hwid = get_hwid()
 
-    if data.get("secret") != API_SECRET:
-        return web.json_response({"ok": False, "error": "unauthorized"}, status=403)
-
-    key = str(data.get("key", "")).strip()
-    hwid = str(data.get("hwid", "")).strip()
-
-    if not key or not hwid or hwid == "UNKNOWN":
-        return web.json_response({"ok": False, "error": "missing_key_or_hwid"}, status=400)
-
-    row = await db.get_key(key)
-    if not row:
-        return web.json_response({"ok": False, "error": "invalid_key"}, status=404)
-
-    if row["blacklisted"]:
-        return web.json_response({"ok": False, "error": "blacklisted"}, status=403)
-
-    if not row["hwid"]:
-        await db.bind_hwid(key, hwid)
-        row = await db.get_key(key)
-    elif row["hwid"] != hwid:
-        return web.json_response({"ok": False, "error": "hwid_mismatch"}, status=403)
-
-    if row["auth_expire"] and int(time.time()) >= row["auth_expire"]:
-        return web.json_response({"ok": False, "error": "expired"}, status=403)
-
-    seconds_left = 0
-    if row["auth_expire"]:
-        seconds_left = max(0, int(row["auth_expire"]) - int(time.time()))
-
-    return web.json_response({
-        "ok": True,
-        "script": build_script(row, seconds_left),
-        "seconds_left": seconds_left,
+-- Retry loop (tries 3 times if the server is sleeping/starting up)
+local res, err
+for i = 1, 3 do
+    res, err = http_post(API_URL, {
+        secret = API_SECRET,
+        key = script_key or "",
+        hwid = hwid,
     })
+    
+    if res and res.StatusCode == 200 then
+        break -- Success, stop retrying
+    elseif res and res.StatusCode == 503 then
+        warn("[keyhub] Server is booting up (503). Retrying in 5 seconds...")
+        task.wait(5)
+    else
+        break -- Actual error (invalid key, etc.), stop retrying
+    end
+end
 
-async def handle_loader(request: web.Request) -> web.Response:
-    try:
-        with open("loader.lua", "r") as f:
-            return web.Response(text=f.read(), content_type="text/plain")
-    except FileNotFoundError:
-        return web.Response(text="-- loader missing. owner must run /setpanel", status=404)
+if not res then
+    warn("[keyhub] network error: " .. tostring(err))
+    return
+end
 
-async def start_server():
-    await db.init_db()
-    app = web.Application()
-    app.router.add_post("/load", handle_load)
-    app.router.add_get("/loader", handle_loader)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    print(f"[server] listening on :{PORT}")
-    return runner
+local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+if not ok or not data then
+    warn("[keyhub] bad response")
+    return
+end
+
+if not data.ok then
+    warn("[keyhub] auth failed: " .. tostring(data.error))
+    return
+end
+
+local chunk, load_err = loadstring(data.script)
+if not chunk then
+    warn("[keyhub] script load failed: " .. tostring(load_err))
+    return
+end
+
+chunk()
