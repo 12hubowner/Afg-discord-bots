@@ -15,6 +15,9 @@ def is_owner():
         return True
     return app_commands.check(predicate)
 
+# ==========================================
+# MODALS
+# ==========================================
 class RedeemModal(discord.ui.Modal, title="Redeem a key"):
     key_input = discord.ui.TextInput(
         label="Enter script key below:", 
@@ -37,6 +40,7 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
             await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
             return
 
+        # Auto assign buyer role if configured
         role_id_str = await db.get_setting("buyer_role_id")
         if role_id_str:
             role = interaction.guild.get_role(int(role_id_str))
@@ -48,6 +52,9 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
 
         await interaction.response.send_message("✅ Key redeemed successfully! Click **Get Script**.", ephemeral=True)
 
+# ==========================================
+# PANEL VIEW
+# ==========================================
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -115,7 +122,7 @@ class PanelView(discord.ui.View):
         
         hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
         expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
-        status = "Blacklisted" if row["blacklisted"] else "Active"
+        status = "Paused" if await db.get_setting("system_paused", "0") == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
 
         embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
         embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
@@ -124,6 +131,9 @@ class PanelView(discord.ui.View):
         embed.add_field(name="HWID", value=hwid_status)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# ==========================================
+# COMMANDS
+# ==========================================
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -137,6 +147,7 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message(msg, ephemeral=True)
 
+    # --- PANEL SETUP ---
     @app_commands.command(name="setpanel", description="Sends the control panel message in this channel")
     @is_owner()
     async def setpanel(self, interaction: discord.Interaction, loader_script: discord.Attachment, manager_role: discord.Role):
@@ -159,14 +170,15 @@ class Panel(commands.Cog):
         await interaction.response.send_message(embed=embed, view=PanelView())
         await interaction.followup.send(f"✅ Panel posted.", ephemeral=True)
 
+    # --- SAY COMMAND ---
     @app_commands.command(name="say", description="Make the bot say a message in the channel")
     @is_owner()
-    @app_commands.describe(text="The message to send")
     async def say(self, interaction: discord.Interaction, text: str):
         await interaction.response.send_message("✅ Message sent.", ephemeral=True)
         await interaction.channel.send(text)
 
-    @app_commands.command(name="togglepanel", description="Pause or resume all keys (kicks active users if paused)")
+    # --- PAUSE / RESUME TIMERS ---
+    @app_commands.command(name="togglepanel", description="Pause or resume all keys (kicks users and freezes timers)")
     @is_owner()
     async def togglepanel(self, interaction: discord.Interaction):
         is_paused = await db.get_setting("system_paused", "0")
@@ -177,16 +189,14 @@ class Panel(commands.Cog):
             
             embed = discord.Embed(
                 title="⏸️ SYSTEM PAUSED", 
-                description="All keys have been frozen and active users are being kicked.\nTimers will resume and compensate when you unpause.", 
+                description="All keys have been frozen. Active users will be kicked.", 
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed)
-            await interaction.channel.send("⚠️ **Logs are down.** All users are being kicked and key timers paused.")
-            
+            await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
         else:
             pause_time_str = await db.get_setting("pause_time", str(int(time.time())))
             down_duration = int(time.time()) - int(pause_time_str)
-            
             await db.set_setting("system_paused", "0")
             
             conn = sqlite3.connect(db.DB_PATH)
@@ -201,12 +211,13 @@ class Panel(commands.Cog):
             
             embed = discord.Embed(
                 title="▶️ SYSTEM RESUMED", 
-                description=f"Keys are active again. All users received `{duration_str}` added to their timer.", 
+                description=f"Keys are active. All users received `{duration_str}` added to their timer.", 
                 color=discord.Color.green()
             )
             await interaction.response.send_message(embed=embed)
-            await interaction.channel.send(f"✅ **Logs are back online.** Timers resumed, added `{duration_str}`.")
+            await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
 
+    # --- WHITELIST ---
     @app_commands.command(name="whitelist", description="Whitelists a user")
     @is_owner()
     async def whitelist(self, interaction: discord.Interaction, member: discord.Member, days: int = 0):
@@ -219,6 +230,59 @@ class Panel(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send(f"✅ Whitelisted {member.mention}. Key: `{key}` (DM failed).", ephemeral=True)
 
+    # --- UNWHITELIST ---
+    @app_commands.command(name="unwhitelist", description="Unwhitelists the user")
+    @is_owner()
+    async def unwhitelist(self, interaction: discord.Interaction, member: discord.Member):
+        n = await db.delete_user_keys(member.id)
+        if n > 0: 
+            await interaction.response.send_message(f"✅ Unwhitelisted {member.mention}.", ephemeral=True)
+        else: 
+            await interaction.response.send_message("❌ No key found.", ephemeral=True)
+
+    # --- BLACKLIST ---
+    @app_commands.command(name="blacklist", description="Blacklists the user")
+    @is_owner()
+    async def blacklist(self, interaction: discord.Interaction, member: discord.Member):
+        n = await db.blacklist_user(member.id)
+        if n > 0: 
+            await interaction.response.send_message(f"✅ Blacklisted {member.mention}.", ephemeral=True)
+        else: 
+            await interaction.response.send_message("❌ No key found.", ephemeral=True)
+
+    # --- MASS GENERATE ---
+    @app_commands.command(name="mass-generate", description="Generates multiple keys")
+    @is_owner()
+    async def mass_generate(self, interaction: discord.Interaction, amount: int, days: int = 0):
+        await interaction.response.defer(ephemeral=True)
+        keys = [await db.create_key(OWNER_ID, days if days > 0 else None, "Mass Gen") for _ in range(amount)]
+        text = "\n".join([f"`{k}`" for k in keys[:20]])
+        await interaction.followup.send(f"**Generated {amount} keys:**\n{text}", ephemeral=True)
+
+    # --- COMPENSATE ---
+    @app_commands.command(name="compensate", description="Adds days to everyone")
+    @is_owner()
+    async def compensate(self, interaction: discord.Interaction, days: int):
+        await interaction.response.defer(ephemeral=True)
+        conn = sqlite3.connect(db.DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (days * 86400,))
+        conn.commit()
+        n = c.rowcount
+        conn.close()
+        await interaction.followup.send(f"✅ Compensated {n} users by {days} days.", ephemeral=True)
+
+    # --- FORCE RESET HWID ---
+    @app_commands.command(name="force-resethwid", description="Resets the HWID of a user")
+    @is_owner()
+    async def force_resethwid(self, interaction: discord.Interaction, member: discord.Member):
+        ok = await db.reset_hwid(member.id)
+        if ok: 
+            await interaction.response.send_message(f"✅ HWID forcefully reset for {member.mention}.", ephemeral=True)
+        else: 
+            await interaction.response.send_message("❌ No key found.", ephemeral=True)
+
+    # --- STATS ---
     @app_commands.command(name="stats", description="Shows panel statistics")
     @is_owner()
     async def stats(self, interaction: discord.Interaction):
