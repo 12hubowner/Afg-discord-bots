@@ -3,9 +3,6 @@ import os
 from aiohttp import web
 import db
 
-# ==========================================
-# CONFIGURATION
-# ==========================================
 API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 PORT = int(os.environ.get("PORT", 8080))
 
@@ -34,6 +31,11 @@ async def handle_load(request: web.Request) -> web.Response:
 
     if data.get("secret") != API_SECRET:
         return web.json_response({"ok": False, "error": "unauthorized"}, status=403)
+
+    # Check if the system is paused globally
+    is_paused = await db.get_setting("system_paused", "0")
+    if is_paused == "1":
+        return web.json_response({"ok": False, "error": "paused"}, status=403)
 
     key = str(data.get("key", "")).strip()
     hwid = str(data.get("hwid", "")).strip()
@@ -68,7 +70,6 @@ async def handle_load(request: web.Request) -> web.Response:
     })
 
 async def handle_loader(request: web.Request) -> web.Response:
-    # PROXY PROTECTION: Blocks browsers from viewing the raw code
     if request.headers.get("X-Keyhub-Secret") != API_SECRET:
         return web.Response(text="403 Forbidden: Unauthorized", status=403)
         
