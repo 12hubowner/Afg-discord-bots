@@ -717,4 +717,159 @@ async def verify_cmd(interaction: discord.Interaction, member: discord.Member):
         await interaction.response.send_message("❌ Verified Seller role missing.", ephemeral=True)
         return
     if role in member.roles:
-        await interaction.response.send_message
+        await interaction.response.send_message(f"ℹ️ {member.mention} is already verified.")
+        return
+    await member.add_roles(role)
+    await interaction.response.send_message(f"✅ {member.mention} is now a **Verified Seller**.")
+
+
+@bot.tree.command(name="unverify", description="Remove the Verified Seller badge (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def unverify_cmd(interaction: discord.Interaction, member: discord.Member):
+    role = discord.utils.get(interaction.guild.roles, name=VERIFIED_ROLE_NAME)
+    if not role or role not in member.roles:
+        await interaction.response.send_message(f"ℹ️ {member.mention} is not verified.")
+        return
+    await member.remove_roles(role)
+    await interaction.response.send_message(f"✅ Removed verification from {member.mention}.")
+
+
+@bot.tree.command(name="sell_panel", description="Post the sell panel in #🛒-sell-here (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def sell_panel(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    ch = get_channel(interaction.guild, CHANNELS["SellPanel"])
+    if not ch:
+        await ensure_channels(interaction.guild)
+        ch = get_channel(interaction.guild, CHANNELS["SellPanel"])
+    if not ch:
+        await interaction.followup.send("❌ Could not find #🛒-sell-here."); return
+    embed = discord.Embed(
+        title="🛒 Sell an Item",
+        description="Click **Post Item** to start your listing thread.\nYou need the **Reseller** role to sell.",
+        color=0x4FBF8B
+    )
+    view = SellPanelView()
+    await ch.send(embed=embed, view=view)
+    await interaction.followup.send(f"✅ Sell panel posted in {ch.mention}")
+
+
+@bot.tree.command(name="blacklist", description="Manually blacklist a user (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def blacklist_cmd(interaction: discord.Interaction, member: discord.Member, reason: str = "Manual"):
+    await interaction.response.defer(thinking=True)
+    role = discord.utils.get(interaction.guild.roles, name=BLACKLIST_ROLE_NAME)
+    if not role: role = await ensure_blacklist_role(interaction.guild)
+    if role in member.roles:
+        await interaction.followup.send(f"ℹ️ {member.mention} is already blacklisted."); return
+    await member.add_roles(role, reason=reason)
+    await interaction.followup.send(f"⛔ Blacklisted {member.mention}")
+
+
+@bot.tree.command(name="unblacklist", description="Remove a user from Blacklisted (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def unblacklist_cmd(interaction: discord.Interaction, member: discord.Member):
+    await interaction.response.defer(thinking=True)
+    role = discord.utils.get(interaction.guild.roles, name=BLACKLIST_ROLE_NAME)
+    if not role or role not in member.roles:
+        await interaction.followup.send(f"ℹ️ {member.mention} is not blacklisted."); return
+    await member.remove_roles(role)
+    await interaction.followup.send(f"✅ Unblacklisted {member.mention}")
+
+
+@bot.tree.command(name="blacklisted", description="List all blacklisted users")
+async def blacklisted_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    role = discord.utils.get(interaction.guild.roles, name=BLACKLIST_ROLE_NAME)
+    if not role or not role.members:
+        await interaction.followup.send("No blacklisted users."); return
+    members = "\n".join(f"• {m} ({m.id})" for m in role.members)
+    await interaction.followup.send(f"⛔ **Blacklisted:**\n{members}")
+
+
+@bot.tree.command(name="add", description="Import a product from a URL (admin only)")
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(url="Product URL", cat="Optional category")
+@app_commands.choices(cat=[app_commands.Choice(name="Men", value="Men"), app_commands.Choice(name="Women", value="Women"), app_commands.Choice(name="Kids", value="Kids")])
+async def add_product(interaction: discord.Interaction, url: str, cat: app_commands.Choice[str] = None):
+    await interaction.response.defer(thinking=True)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            html = r.read().decode("utf-8", errors="ignore")
+
+        def og(prop):
+            for pat in [rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']+)', rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:{prop}["\']']:
+                m = re.search(pat, html, re.IGNORECASE)
+                if m: return m.group(1).strip()
+            return None
+
+        title = re.sub(r'\s*[|\-–]\s*(SHEIN|Temu|Amazon).*$', '', og("title") or "Untitled", flags=re.IGNORECASE).strip()[:120]
+        desc = (og("description") or "")[:300]
+        image = og("image") or og("image:secure_url")
+        price = 0.0
+        for pat in [r'"price"\s*:\s*"?([\d.]+)', r'product:price:amount["\'][^>]+content=["\']([\d.]+)']:
+            m = re.search(pat, html)
+            if m:
+                try:
+                    price = float(m.group(1))
+                    if price > 0: break
+                except ValueError: continue
+
+        sizes = set()
+        for m in re.finditer(r'"sizeName"\s*:\s*"([^"]+)"', html):
+            sizes.add(m.group(1).strip().upper())
+        sorted_sizes = [s for s in ["XS","S","M","L","XL","2XL","XXL","3XL"] if s in sizes]
+
+        original_price = price
+        price, added = apply_price_rule(price)
+        final_cat = cat.value if cat else detect_category(title + " " + desc + " " + url)
+        data_url = download_image_as_data_url(image, referer=url) if image else None
+
+        product = {
+            "id": int(time.time() * 1000), "name": title, "price": float(price), "cat": final_cat,
+            "condition": "New", "desc": desc or f"From {url}", "print": "AFG",
+            "images": [data_url] if data_url else [], "sizes": sorted_sizes,
+            "postedAt": datetime.utcnow().isoformat() + "Z", "sourceUrl": url
+        }
+        db.reference("products").push(product)
+
+        preview = discord.Embed(title="✅ Added", description=f"**{title}**", color=0xB026FF)
+        price_line = f"${price:.2f}"
+        if added: price_line += f" (was ${original_price:.2f})"
+        preview.add_field(name="Price", value=price_line, inline=True)
+        preview.add_field(name="Category", value=final_cat, inline=True)
+        preview.add_field(name="Image", value="✅" if data_url else "❌", inline=True)
+        if data_url:
+            f = image_from_data_url(data_url)
+            if f:
+                preview.set_image(url="attachment://item.jpg")
+                await interaction.followup.send(embed=preview, file=f, ephemeral=True); return
+        await interaction.followup.send(embed=preview, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: `{e}`", ephemeral=True)
+
+
+@bot.tree.command(name="setup", description="Create missing channels + roles + sell panel (admin only)")
+@app_commands.default_permissions(administrator=True)
+async def setup(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    await ensure_channels(interaction.guild)
+    await ensure_blacklist_role(interaction.guild)
+    await ensure_reseller_role(interaction.guild)
+    await ensure_verified_role(interaction.guild)
+    await ensure_sell_panel(interaction.guild)
+    await interaction.followup.send("✅ Channels + roles + sell panel ready.")
+
+
+@bot.tree.command(name="channels", description="List channels")
+async def channels_cmd(interaction: discord.Interaction):
+    names = "\n".join(f"• #{n}" for n in CHANNELS.values())
+    await interaction.response.send_message(f"📁 Channels:\n{names}")
+
+
+# ---------- RUN ----------
+if __name__ == "__main__":
+    if not DISCORD_TOKEN:
+        raise SystemExit("\n❌ DISCORD_TOKEN missing in ~/.env\n")
+    bot.run(DISCORD_TOKEN)
