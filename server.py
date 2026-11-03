@@ -3,9 +3,15 @@ import os
 from aiohttp import web
 import db
 
+# ==========================================
+# CONFIGURATION
+# ==========================================
 API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
 PORT = int(os.environ.get("PORT", 8080))
 
+# ==========================================
+# API & LOADER HANDLERS
+# ==========================================
 def load_script_body() -> str:
     try:
         with open("scripts/main.lua", "r") as f:
@@ -68,20 +74,40 @@ async def handle_load(request: web.Request) -> web.Response:
         "seconds_left": seconds_left,
     })
 
-async def handle_loader(request: web.Request) -> web.Response:
+# ==========================================
+# SECURE LOADER ROUTES
+# ==========================================
+async def handle_paid_loader(request: web.Request) -> web.Response:
     if request.headers.get("X-Keyhub-Secret") != API_SECRET:
         return web.Response(text="403 Forbidden: Unauthorized", status=403)
     try:
-        with open("loader.lua", "r") as f:
+        with open("paid_loader.lua", "r") as f:
             return web.Response(text=f.read(), content_type="text/plain")
     except FileNotFoundError:
-        return web.Response(text="-- loader missing.", status=404)
+        return web.Response(text="-- paid loader missing. owner must run /setpanel", status=404)
 
+async def handle_free_loader(request: web.Request) -> web.Response:
+    if request.headers.get("X-Keyhub-Secret") != API_SECRET:
+        return web.Response(text="403 Forbidden: Unauthorized", status=403)
+    try:
+        with open("free_loader.lua", "r") as f:
+            return web.Response(text=f.read(), content_type="text/plain")
+    except FileNotFoundError:
+        return web.Response(text="-- free loader missing. owner must run /setpanel", status=404)
+
+# ==========================================
+# START SERVER
+# ==========================================
 async def start_server():
     await db.init_db()
     app = web.Application()
+    
+    # API Routes
     app.router.add_post("/load", handle_load)
-    app.router.add_get("/loader", handle_loader)
+    
+    # Loader Routes
+    app.router.add_get("/paid_loader", handle_paid_loader)
+    app.router.add_get("/free_loader", handle_free_loader)
     
     runner = web.AppRunner(app)
     await runner.setup()
