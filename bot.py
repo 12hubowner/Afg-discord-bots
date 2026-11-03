@@ -27,18 +27,18 @@ async def on_ready():
         print(f"[bot] sync failed: {e}")
 
 async def main():
-    # Start the web server for Render (and for the Lua loader API)
+    # Start the web server for the Lua loader API and Render health checks
     runner = await server.start_server()
     
     async with bot:
-        # Load the panel cog
+        # Load the panel commands
         await bot.load_extension("cogs.panel")
         
         try:
-            # Start the Discord bot
+            # Start the bot
             await bot.start(DISCORD_TOKEN)
         finally:
-            # Clean up web server if bot crashes
+            # Clean up web server if bot stops
             await runner.cleanup()
 
 if __name__ == "__main__":
