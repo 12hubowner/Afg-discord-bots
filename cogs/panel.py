@@ -15,9 +15,6 @@ def is_owner():
         return True
     return app_commands.check(predicate)
 
-# ==========================================
-# MODALS
-# ==========================================
 class RedeemModal(discord.ui.Modal, title="Redeem a key"):
     key_input = discord.ui.TextInput(
         label="Enter script key below:", 
@@ -40,7 +37,6 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
             await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
             return
 
-        # Auto assign buyer role if configured
         role_id_str = await db.get_setting("buyer_role_id")
         if role_id_str:
             role = interaction.guild.get_role(int(role_id_str))
@@ -52,9 +48,6 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
 
         await interaction.response.send_message("✅ Key redeemed successfully! Click **Get Script**.", ephemeral=True)
 
-# ==========================================
-# PANEL VIEW
-# ==========================================
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -132,9 +125,6 @@ class PanelView(discord.ui.View):
         embed.add_field(name="HWID", value=hwid_status)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ==========================================
-# COMMANDS
-# ==========================================
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -148,7 +138,6 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message(msg, ephemeral=True)
 
-    # --- PANEL SETUP ---
     @app_commands.command(name="setpanel", description="Sends the control panel message in this channel")
     @is_owner()
     async def setpanel(self, interaction: discord.Interaction, loader_script: discord.Attachment, manager_role: discord.Role):
@@ -171,14 +160,12 @@ class Panel(commands.Cog):
         await interaction.response.send_message(embed=embed, view=PanelView())
         await interaction.followup.send(f"✅ Panel posted.", ephemeral=True)
 
-    # --- SAY COMMAND ---
     @app_commands.command(name="say", description="Make the bot say a message in the channel")
     @is_owner()
     async def say(self, interaction: discord.Interaction, text: str):
         await interaction.response.send_message("✅ Message sent.", ephemeral=True)
         await interaction.channel.send(text)
 
-    # --- PAUSE TIMERS ---
     @app_commands.command(name="pause", description="Pause all keys, kick active users, and freeze timers")
     @is_owner()
     async def pause(self, interaction: discord.Interaction):
@@ -197,7 +184,6 @@ class Panel(commands.Cog):
         await interaction.response.send_message(embed=embed)
         await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
 
-    # --- UNPAUSE TIMERS ---
     @app_commands.command(name="unpause", description="Unpause keys and compensate users for downtime")
     @is_owner()
     async def unpause(self, interaction: discord.Interaction):
@@ -227,7 +213,6 @@ class Panel(commands.Cog):
         await interaction.response.send_message(embed=embed)
         await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
 
-    # --- WHITELIST ---
     @app_commands.command(name="whitelist", description="Whitelists a user")
     @is_owner()
     async def whitelist(self, interaction: discord.Interaction, member: discord.Member, days: int = 0):
@@ -240,7 +225,6 @@ class Panel(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send(f"✅ Whitelisted {member.mention}. Key: `{key}` (DM failed).", ephemeral=True)
 
-    # --- UNWHITELIST ---
     @app_commands.command(name="unwhitelist", description="Unwhitelists the user")
     @is_owner()
     async def unwhitelist(self, interaction: discord.Interaction, member: discord.Member):
@@ -250,7 +234,6 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message("❌ No key found.", ephemeral=True)
 
-    # --- BLACKLIST ---
     @app_commands.command(name="blacklist", description="Blacklists the user")
     @is_owner()
     async def blacklist(self, interaction: discord.Interaction, member: discord.Member):
@@ -260,7 +243,6 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message("❌ No key found.", ephemeral=True)
 
-    # --- MASS GENERATE ---
     @app_commands.command(name="mass-generate", description="Generates multiple keys")
     @is_owner()
     async def mass_generate(self, interaction: discord.Interaction, amount: int, days: int = 0):
@@ -269,7 +251,6 @@ class Panel(commands.Cog):
         text = "\n".join([f"`{k}`" for k in keys[:20]])
         await interaction.followup.send(f"**Generated {amount} keys:**\n{text}", ephemeral=True)
 
-    # --- COMPENSATE ---
     @app_commands.command(name="compensate", description="Adds days to everyone")
     @is_owner()
     async def compensate(self, interaction: discord.Interaction, days: int):
@@ -282,7 +263,6 @@ class Panel(commands.Cog):
         conn.close()
         await interaction.followup.send(f"✅ Compensated {n} users by {days} days.", ephemeral=True)
 
-    # --- FORCE RESET HWID ---
     @app_commands.command(name="force-resethwid", description="Resets the HWID of a user")
     @is_owner()
     async def force_resethwid(self, interaction: discord.Interaction, member: discord.Member):
@@ -292,7 +272,6 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message("❌ No key found.", ephemeral=True)
 
-    # --- STATS ---
     @app_commands.command(name="stats", description="Shows panel statistics")
     @is_owner()
     async def stats(self, interaction: discord.Interaction):
