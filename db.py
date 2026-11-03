@@ -80,12 +80,6 @@ async def delete_user_keys(discord_id: int) -> int:
         await db.commit()
         return cur.rowcount
 
-async def delete_specific_key(key: str) -> bool:
-    async with aiosqlite.connect(DB_PATH) as db:
-        cur = await db.execute("DELETE FROM keys WHERE key = ?", (key,))
-        await db.commit()
-        return cur.rowcount > 0
-
 async def set_setting(key: str, value: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
