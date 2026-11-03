@@ -61,10 +61,10 @@ class PanelView(discord.ui.View):
         if row["auth_expire"] and int(time.time()) >= row["auth_expire"]: 
             return await interaction.response.send_message("❌ Your key has expired.", ephemeral=True)
 
-        # The Loadstring
+        # UPDATED TO YOUR NEW RENDER URL
         loadstring_payload = (
             f'script_key = "{row["key"]}"\n'
-            f'loadstring(game:HttpGet("https://afg-bot.onrender.com/loader"))()'
+            f'loadstring(game:HttpGet("https://afg-discord-bots.onrender.com/loader"))()'
         )
         
         try:
