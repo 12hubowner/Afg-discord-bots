@@ -54,7 +54,7 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
         await interaction.response.send_message("✅ Key redeemed successfully! You can now click **Get Paid Script**.", ephemeral=True)
 
 # ==========================================
-# FREE PANEL (No Redeem Button)
+# FREE PANEL VIEW (No Redeem Button)
 # ==========================================
 class FreePanelView(discord.ui.View):
     def __init__(self):
@@ -127,7 +127,7 @@ class FreePanelView(discord.ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==========================================
-# PAID PANEL (Includes Redeem Button)
+# PAID PANEL VIEW (Includes Redeem Button)
 # ==========================================
 class PaidPanelView(discord.ui.View):
     def __init__(self):
@@ -287,7 +287,6 @@ class Panel(commands.Cog):
         await interaction.response.send_message("✅ Message sent.", ephemeral=True)
         await interaction.channel.send(text)
 
-    # --- PAUSE / UNPAUSE PAID ---
     @app_commands.command(name="pause_paid", description="Pause the Paid script only")
     @is_owner()
     async def pause_paid(self, interaction: discord.Interaction):
@@ -321,7 +320,6 @@ class Panel(commands.Cog):
         if log_channel:
             await log_channel.send("✅ **Paid logs are online.**")
 
-    # --- PAUSE / UNPAUSE FREE ---
     @app_commands.command(name="pause_free", description="Pause the Free script only")
     @is_owner()
     async def pause_free(self, interaction: discord.Interaction):
@@ -346,7 +344,6 @@ class Panel(commands.Cog):
         if log_channel:
             await log_channel.send("✅ **Free logs are online.**")
 
-    # --- PAUSE / UNPAUSE ALL ---
     @app_commands.command(name="pause_all", description="Pause both Paid and Free scripts")
     @is_owner()
     async def pause_all(self, interaction: discord.Interaction):
@@ -385,7 +382,6 @@ class Panel(commands.Cog):
         if log_channel:
             await log_channel.send("✅ **ALL logs are online.** Everything resumed.")
 
-    # --- WHITELIST ---
     @app_commands.command(name="whitelist", description="Gives a user a Paid Key")
     @is_owner()
     async def whitelist(self, interaction: discord.Interaction, member: discord.Member, days: int = 0):
@@ -453,7 +449,7 @@ class Panel(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 async def setup(bot):
-    bot.add_view(PanelView())
+    # Register both views so the buttons work
     bot.add_view(FreePanelView())
     bot.add_view(PaidPanelView())
     await bot.add_cog(Panel(bot))
