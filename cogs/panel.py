@@ -15,6 +15,9 @@ def is_owner():
         return True
     return app_commands.check(predicate)
 
+# ==========================================
+# MODALS
+# ==========================================
 class RedeemModal(discord.ui.Modal, title="Redeem a key"):
     key_input = discord.ui.TextInput(
         label="Enter script key below:", 
@@ -37,6 +40,7 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
             await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
             return
 
+        # Auto assign buyer role if configured
         role_id_str = await db.get_setting("buyer_role_id")
         if role_id_str:
             role = interaction.guild.get_role(int(role_id_str))
@@ -48,6 +52,9 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
 
         await interaction.response.send_message("✅ Key redeemed successfully! Click **Get Script**.", ephemeral=True)
 
+# ==========================================
+# PANEL VIEW
+# ==========================================
 class PanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -83,7 +90,7 @@ class PanelView(discord.ui.View):
     async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_id_str = await db.get_setting("buyer_role_id")
         if not role_id_str: 
-            return await interaction.response.send_message("❌ Role not configured.", ephemeral=True)
+            return await interaction.response.send_message("❌ Role not configured. Owner must run /setup_role.", ephemeral=True)
         
         role = interaction.guild.get_role(int(role_id_str))
         if not role: 
@@ -125,6 +132,9 @@ class PanelView(discord.ui.View):
         embed.add_field(name="HWID", value=hwid_status)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
+# ==========================================
+# COMMANDS
+# ==========================================
 class Panel(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -138,9 +148,24 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message(msg, ephemeral=True)
 
+    # --- ROLE SETUP COMMAND ---
+    @app_commands.command(name="setup_role", description="Pick the role the panel will give out")
+    @is_owner()
+    @app_commands.describe(role="The role to give to buyers")
+    async def setup_role(self, interaction: discord.Interaction, role: discord.Role):
+        await db.set_setting("buyer_role_id", str(role.id))
+        
+        embed = discord.Embed(
+            title="✅ Role Configured",
+            description=f"The panel will now automatically give out the {role.mention} role when users redeem or click Get Role.",
+            color=discord.Color.green()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    # --- PANEL SETUP ---
     @app_commands.command(name="setpanel", description="Sends the control panel message in this channel")
     @is_owner()
-    async def setpanel(self, interaction: discord.Interaction, loader_script: discord.Attachment, manager_role: discord.Role):
+    async def setpanel(self, interaction: discord.Interaction, loader_script: discord.Attachment):
         if not loader_script.filename.endswith(".lua"): 
             return await interaction.response.send_message("❌ Must be .lua", ephemeral=True)
         
@@ -148,11 +173,12 @@ class Panel(commands.Cog):
         with open("loader.lua", "wb") as f: 
             f.write(raw)
 
-        await db.set_setting("buyer_role_id", str(manager_role.id))
-
         embed = discord.Embed(
-            title="GreenDuels Control Panel", 
-            description="This control panel is for the project: **GreenDuels**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role", 
+            title="Afg Control Panel", 
+            description=(
+                "This control panel is for the project: **Afg Joiner**\n"
+                "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role"
+            ), 
             color=discord.Color.from_rgb(240, 160, 0)
         )
         embed.set_footer(text=f"Sent by {interaction.user.display_name}")
