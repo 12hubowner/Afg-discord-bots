@@ -1,261 +1,401 @@
-#!/usr/bin/env python3
 import os
+import time
 import asyncio
+import sqlite3
 import discord
+from discord.ext import commands
 from discord import app_commands
 from aiohttp import web
+import db
 
 # ==========================================
-# CONFIGURATION (Set these in Render Env Vars)
+# CONFIGURATION
 # ==========================================
-TOKEN = os.environ.get("TICKET_BOT_TOKEN")
-TARGET_GUILD_ID = int(os.environ.get("TARGET_GUILD_ID", "1451327295682777151"))
+DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 PORT = int(os.environ.get("PORT", 8080))
+API_SECRET = "keyhub_9f3a8c7e2b1d4056_do_not_share"
+OWNER_ID = 1456353767606849628
+LOG_CHANNEL_ID = 1566537524803928184
 
-STAFF_ROLE_NAME = "Staff"
-TICKETS_CATEGORY_NAME = "Tickets"
-
-# ==========================================
-# DISCORD BOT SETUP
-# ==========================================
 intents = discord.Intents.default()
-intents.guilds = True
-intents.messages = True
+intents.message_content = True
+intents.members = True
 
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
-
-# ==========================================
-# TICKET SYSTEM HELPERS
-# ==========================================
-async def get_or_create_tickets_category(guild):
-    for cat in guild.categories:
-        if cat.name == TICKETS_CATEGORY_NAME:
-            return cat
-    return await guild.create_category(TICKETS_CATEGORY_NAME, reason="Ticket system")
-
-def get_staff_role(guild):
-    return discord.utils.get(guild.roles, name=STAFF_ROLE_NAME)
-
-PANEL_EMBED_KW = dict(
-    title="Help & Support",
-    description="Click below to create a new support ticket 🎫\nAfg ticket",
-    color=discord.Color.blurple(),
-)
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ==========================================
-# VIEWS
+# WEB SERVER FOR RENDER (24/7)
 # ==========================================
-class OpenTicketView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="NEED HELPS",
-        style=discord.ButtonStyle.primary,
-        emoji="🆘",
-        custom_id="open_ticket_btn",
-    )
-    async def open_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        user = interaction.user
-
-        tickets_cat = await get_or_create_tickets_category(guild)
-        
-        for ch in tickets_cat.text_channels:
-            if ch.topic and f"ticket-owner:{user.id}" in ch.topic:
-                await interaction.response.send_message(
-                    f"You already have an open ticket: {ch.mention}",
-                    ephemeral=True,
-                )
-                return
-
-        staff = get_staff_role(guild)
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            user: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True,
-                read_message_history=True, attach_files=True),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True,
-                manage_channels=True, read_message_history=True),
-        }
-        if staff:
-            overwrites[staff] = discord.PermissionOverwrite(
-                view_channel=True, send_messages=True,
-                read_message_history=True, manage_channels=True)
-
-        try:
-            channel = await guild.create_text_channel(
-                name=f"ticket-{user.name}"[:90],
-                category=tickets_cat,
-                overwrites=overwrites,
-                topic=f"ticket-owner:{user.id}",
-                reason=f"Ticket opened by {user}",
-            )
-        except Exception as e:
-            await interaction.response.send_message(
-                f"Couldn't create ticket channel: `{e}`", ephemeral=True)
-            return
-
-        embed = discord.Embed(
-            title="Ticket Opened",
-            description=f"{client.user.mention} has created a new 🆘 NEED HELPS ticket.",
-            color=discord.Color.gold(),
-        )
-        if guild.icon:
-            embed.set_footer(text="Ticket King | /close", icon_url=guild.icon.url)
-        else:
-            embed.set_footer(text="Ticket King | /close")
-
-        await channel.send(content=user.mention, embed=embed, view=TicketActionView())
-        
-        auto_embed = discord.Embed(
-            title="Support Ticket",
-            description=(
-                f"Hello {user.mention}, thanks for reaching out!\n\n"
-                "Please provide as much detail as possible about your issue. "
-                "A staff member will be with you shortly.\n\n"
-                "*You can close this ticket at any time by clicking the button above.*"
-            ),
-            color=discord.Color.green()
-        )
-        mention_staff = staff.mention if staff else ""
-        await channel.send(content=mention_staff, embed=auto_embed)
-
-        await interaction.response.send_message(
-            f"Ticket created: {channel.mention}", ephemeral=True)
-
-class TicketActionView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(
-        label="Close Ticket",
-        style=discord.ButtonStyle.danger,
-        emoji="🔒",
-        custom_id="close_ticket_btn",
-    )
-    async def close_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        channel = interaction.channel
-        guild = interaction.guild
-
-        staff = get_staff_role(guild)
-        is_staff = staff in interaction.user.roles if staff else False
-        is_owner = channel.topic and f"ticket-owner:{interaction.user.id}" in channel.topic
-        
-        if not (is_staff or is_owner):
-            await interaction.response.send_message(
-                "Only the ticket opener or staff can close this.", ephemeral=True)
-            return
-
-        await interaction.response.send_message("Closing ticket...", ephemeral=True)
-
-        try:
-            await asyncio.sleep(2)
-            await channel.delete(reason=f"Ticket closed by {interaction.user}")
-        except Exception as e:
-            print(f"[!] close delete failed: {e}")
-
-    @discord.ui.button(
-        label="Claim Ticket",
-        style=discord.ButtonStyle.secondary,
-        emoji="📜",
-        custom_id="claim_ticket_btn",
-    )
-    async def claim_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
-        guild = interaction.guild
-        staff = get_staff_role(guild)
-
-        is_staff = staff in interaction.user.roles if staff else False
-        if not is_staff:
-            await interaction.response.send_message("Only staff can claim tickets.", ephemeral=True)
-            return
-
-        button.disabled = True
-        try:
-            await interaction.message.edit(view=self)
-        except Exception as e:
-            print(f"[!] failed to disable claim button: {e}")
-
-        embed = discord.Embed(
-            title="Ticket Claimed",
-            description=f"This ticket has been claimed by {interaction.user.mention}.",
-            color=discord.Color.gold(),
-        )
-        await interaction.response.send_message(
-            content=interaction.user.mention,
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(users=True)
-        )
-
-# ==========================================
-# SLASH COMMAND
-# ==========================================
-@tree.command(name="panel", description="Spawn the ticket panel")
-@app_commands.default_permissions(manage_guild=True)
-async def panel_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(**PANEL_EMBED_KW)
-    await interaction.channel.send(embed=embed, view=OpenTicketView())
-    await interaction.response.send_message("Panel posted.", ephemeral=True)
-
-# ==========================================
-# DISCORD STARTUP
-# ==========================================
-@client.event
-async def on_ready():
-    print(f"[+] Logged in as {client.user}")
-    client.add_view(OpenTicketView())
-    client.add_view(TicketActionView())
-    
-    guild_obj = discord.Object(id=TARGET_GUILD_ID)
-    
+def load_script_body() -> str:
     try:
-        tree.clear_commands(guild=guild_obj)
-        await tree.sync(guild=guild_obj)
-        print(f"[+] Cleared old slash commands from guild {TARGET_GUILD_ID}")
-        
-        tree.copy_global_to(guild=guild_obj)
-        synced = await tree.sync(guild=guild_obj)
-        print(f"[+] Synced {len(synced)} slash command(s) to guild {TARGET_GUILD_ID}")
-    except Exception as e:
-        print(f"[!] sync failed: {e}")
-        
-    print("[+] Ready. Run /panel to post the ticket panel.")
+        with open("scripts/main.lua", "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return '-- no script body configured'
 
-# ==========================================
-# RENDER WEB SERVER (Keeps it awake)
-# ==========================================
-async def handle_ping(request):
-    return web.Response(text="Bot is online!")
+def build_script(row, seconds_left: int) -> str:
+    header = f"""-- LRM runtime vars
+LRM_IsUserPremium = true
+LRM_SecondsLeft = {seconds_left}
+LRM_LinkedDiscordID = "{row['discord_id']}"
+LRM_ScriptName = "keyhub"
+-- end LRM
+"""
+    return header + "\n" + load_script_body()
+
+async def handle_load(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad_request"}, status=400)
+
+    if data.get("secret") != API_SECRET:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=403)
+
+    is_paused = await db.get_setting("system_paused", "0")
+    if is_paused == "1":
+        return web.json_response({"ok": False, "error": "paused"}, status=403)
+
+    key = str(data.get("key", "")).strip()
+    hwid = str(data.get("hwid", "")).strip()
+
+    if not key or not hwid or hwid == "UNKNOWN":
+        return web.json_response({"ok": False, "error": "missing_key_or_hwid"}, status=400)
+
+    row = await db.get_key(key)
+    if not row:
+        return web.json_response({"ok": False, "error": "invalid_key"}, status=404)
+
+    if row["blacklisted"]:
+        return web.json_response({"ok": False, "error": "blacklisted"}, status=403)
+
+    if not row["hwid"]:
+        await db.bind_hwid(key, hwid)
+        row = await db.get_key(key)
+    elif row["hwid"] != hwid:
+        return web.json_response({"ok": False, "error": "hwid_mismatch"}, status=403)
+
+    if row["auth_expire"] and int(time.time()) >= row["auth_expire"]:
+        return web.json_response({"ok": False, "error": "expired"}, status=403)
+
+    seconds_left = 0
+    if row["auth_expire"]:
+        seconds_left = max(0, int(row["auth_expire"]) - int(time.time()))
+
+    return web.json_response({
+        "ok": True,
+        "script": build_script(row, seconds_left),
+        "seconds_left": seconds_left,
+    })
+
+async def handle_paid_loader(request: web.Request) -> web.Response:
+    try:
+        with open("paid_loader.lua", "r") as f:
+            return web.Response(text=f.read(), content_type="text/plain")
+    except FileNotFoundError:
+        return web.Response(text="-- paid loader missing.", status=404)
 
 async def start_web_server():
+    await db.init_db()
     app = web.Application()
-    app.router.add_get("/", handle_ping)
+    app.router.add_post("/load", handle_load)
+    app.router.add_get("/paid_loader", handle_paid_loader)
     
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f"[+] Web server listening on :{PORT}")
+    print(f"[server] listening on :{PORT}")
 
 # ==========================================
-# MAIN
+# DISCORD UI & COMMANDS
 # ==========================================
-async def main():
-    if not TOKEN:
-        raise SystemExit("Missing TICKET_BOT_TOKEN environment variable")
+def is_owner():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if interaction.user.id != OWNER_ID:
+            await interaction.response.send_message("❌ Owner only.", ephemeral=True)
+            return False
+        return True
+    return app_commands.check(predicate)
+
+class RedeemModal(discord.ui.Modal, title="Redeem a key"):
+    key_input = discord.ui.TextInput(
+        label="Enter script key below:", 
+        placeholder="XXXX-XXXX-XXXX-XXXX", 
+        required=True, 
+        max_length=50
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        key = self.key_input.value.strip().upper()
+        row = await db.get_key(key)
         
-    # 1. Start the web server for Render
+        if not row:
+            await interaction.response.send_message("❌ Invalid key.", ephemeral=True)
+            return
+        if row["blacklisted"]:
+            await interaction.response.send_message("❌ This key is blacklisted.", ephemeral=True)
+            return
+        if row["discord_id"] != interaction.user.id:
+            await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
+            return
+
+        role_id_str = await db.get_setting("buyer_role_id")
+        if role_id_str:
+            role = interaction.guild.get_role(int(role_id_str))
+            if role:
+                try:
+                    await interaction.user.add_roles(role)
+                except discord.Forbidden:
+                    pass
+
+        await interaction.response.send_message("✅ Key redeemed successfully! You can now click **Get Paid Script**.", ephemeral=True)
+
+class PaidPanelView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Redeem Key", style=discord.ButtonStyle.success, emoji="🔑", custom_id="panel:paid_redeem", row=0)
+    async def redeem(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(RedeemModal())
+
+    @discord.ui.button(label="Get Script", style=discord.ButtonStyle.primary, emoji="📜", custom_id="panel:paid_getscript", row=0)
+    async def get_paid(self, interaction: discord.Interaction, button: discord.ui.Button):
+        is_paused = await db.get_setting("system_paused", "0")
+        if is_paused == "1":
+            return await interaction.response.send_message("⏸️ The **Script** is currently paused by the owner.", ephemeral=True)
+
+        row = await db.get_user_key(interaction.user.id)
+        
+        if not row: 
+            return await interaction.response.send_message("❌ You don't have a key. Click **Redeem Key** first.", ephemeral=True)
+        if row["blacklisted"]: 
+            return await interaction.response.send_message("❌ You are blacklisted.", ephemeral=True)
+        if row["auth_expire"] and int(time.time()) >= row["auth_expire"]: 
+            return await interaction.response.send_message("❌ Your key has expired.", ephemeral=True)
+
+        if not os.path.exists("paid_loader.lua"):
+            return await interaction.response.send_message("❌ The script has not been uploaded yet.", ephemeral=True)
+
+        script_text = f'script_key = "{row["key"]}"\nloadstring(game:HttpGet("https://afg-bot.onrender.com/paid_loader"))()'
+        
+        try:
+            await interaction.user.send(f"```lua\n{script_text}\n```")
+            await interaction.response.send_message("✅ Script sent to your DMs.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I can't DM you. Enable DMs.", ephemeral=True)
+
+    @discord.ui.button(label="Get Role", style=discord.ButtonStyle.secondary, emoji="👤", custom_id="panel:paid_getrole", row=0)
+    async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        role_id_str = await db.get_setting("buyer_role_id")
+        if not role_id_str: 
+            return await interaction.response.send_message("❌ Role not configured.", ephemeral=True)
+        
+        role = interaction.guild.get_role(int(role_id_str))
+        if not role: 
+            return await interaction.response.send_message("❌ Role not found.", ephemeral=True)
+
+        row = await db.get_user_key(interaction.user.id)
+        if not row or row["blacklisted"]:
+            return await interaction.response.send_message("❌ You need a key first!", ephemeral=True)
+
+        try:
+            await interaction.user.add_roles(role)
+            await interaction.response.send_message(f"✅ Role {role.mention} assigned.", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ I don't have permission to give that role.", ephemeral=True)
+
+    @discord.ui.button(label="Reset HWID", style=discord.ButtonStyle.secondary, emoji="⚙️", custom_id="panel:paid_resethwid", row=1)
+    async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ok = await db.reset_hwid(interaction.user.id)
+        if ok: await interaction.response.send_message("✅ HWID reset.", ephemeral=True)
+        else: await interaction.response.send_message("❌ No key found to reset.", ephemeral=True)
+
+    @discord.ui.button(label="Get Stats", style=discord.ButtonStyle.secondary, emoji="📊", custom_id="panel:paid_getstats", row=1)
+    async def get_stats(self, interaction: discord.Interaction, button: discord.ui.Button):
+        row = await db.get_user_key(interaction.user.id)
+        if not row: 
+            return await interaction.response.send_message("❌ No key found.", ephemeral=True)
+        
+        hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
+        expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
+        is_paused = await db.get_setting("system_paused", "0")
+        status = "Paused" if is_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
+
+        embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
+        embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
+        embed.add_field(name="Status", value=status)
+        embed.add_field(name="Expires", value=expires)
+        embed.add_field(name="HWID", value=hwid_status)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="setup_role", description="Pick the role the panel will give out")
+@is_owner()
+async def setup_role(interaction: discord.Interaction, role: discord.Role):
+    await db.set_setting("buyer_role_id", str(role.id))
+    embed = discord.Embed(title="✅ Role Configured", description=f"Role set to {role.mention}.", color=discord.Color.green())
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+@bot.tree.command(name="setpanel", description="Sends the control panel")
+@is_owner()
+async def setpanel(interaction: discord.Interaction, paid_loader: discord.Attachment):
+    if not paid_loader.filename.endswith(".lua"): 
+        return await interaction.response.send_message("❌ File must be .lua", ephemeral=True)
+        
+    with open("paid_loader.lua", "wb") as f: 
+        f.write(await paid_loader.read())
+
+    embed_paid = discord.Embed(
+        title="Afg Control Panel", 
+        description=(
+            "This control panel is for the project: **Afg Joiner**\n"
+            "If you're a buyer, click on the buttons below to redeem your key, get the script or get your role"
+        ), 
+        color=discord.Color.from_rgb(240, 160, 0)
+    )
+    embed_paid.set_footer(text=f"Sent by {interaction.user.display_name}")
+    await interaction.channel.send(embed=embed_paid, view=PaidPanelView())
+
+    await interaction.response.send_message("✅ Panel posted.", ephemeral=True)
+
+@bot.tree.command(name="say", description="Make the bot say a message in the channel")
+@is_owner()
+async def say(interaction: discord.Interaction, text: str):
+    await interaction.response.send_message("✅ Message sent.", ephemeral=True)
+    await interaction.channel.send(text)
+
+@bot.tree.command(name="pause", description="Pause all keys and kick active users")
+@is_owner()
+async def pause(interaction: discord.Interaction):
+    is_paused = await db.get_setting("system_paused", "0")
+    if is_paused == "1":
+        return await interaction.response.send_message("❌ System is already paused.", ephemeral=True)
+        
+    await db.set_setting("system_paused", "1")
+    await db.set_setting("pause_time", str(int(time.time())))
+    
+    embed = discord.Embed(title="⏸️ SYSTEM PAUSED", description="All keys frozen.", color=discord.Color.red())
+    await interaction.response.send_message(embed=embed)
+    
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel: await log_channel.send("⚠️ **Logs are down.** Active users kicked, timers paused.")
+
+@bot.tree.command(name="unpause", description="Unpause keys and compensate users")
+@is_owner()
+async def unpause(interaction: discord.Interaction):
+    is_paused = await db.get_setting("system_paused", "0")
+    if is_paused == "0":
+        return await interaction.response.send_message("❌ System is already running.", ephemeral=True)
+        
+    pause_time_str = await db.get_setting("pause_time", str(int(time.time())))
+    down_duration = int(time.time()) - int(pause_time_str)
+    await db.set_setting("system_paused", "0")
+    
+    conn = sqlite3.connect(db.DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (down_duration,))
+    conn.commit()
+    conn.close()
+    
+    m, s = divmod(down_duration, 60)
+    h, m = divmod(m, 60)
+    duration_str = f"{h}h {m}m {s}s"
+    
+    embed = discord.Embed(title="▶️ SYSTEM RESUMED", description=f"Compensated `{duration_str}`.", color=discord.Color.green())
+    await interaction.response.send_message(embed=embed)
+    
+    log_channel = bot.get_channel(LOG_CHANNEL_ID)
+    if log_channel: await log_channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
+
+@bot.tree.command(name="whitelist", description="Gives a user a Paid Key")
+@is_owner()
+async def whitelist(interaction: discord.Interaction, member: discord.Member, days: int = 0):
+    await interaction.response.defer(ephemeral=True)
+    key_days = days if days > 0 else None
+    
+    existing = await db.get_user_key(member.id)
+    if existing: return await interaction.followup.send(f"❌ {member.mention} already has a key.", ephemeral=True)
+        
+    key = await db.create_key(member.id, key_days)
+    
+    try:
+        await member.send(f"🔑 You've been whitelisted.\n**Key:** `{key}`\nClick **Redeem Key** in the server.")
+        await interaction.followup.send(f"✅ Gave {member.mention} a key: `{key}` (DM sent).", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.followup.send(f"✅ Gave {member.mention} a key: `{key}` (DM failed).", ephemeral=True)
+
+@bot.tree.command(name="unwhitelist", description="Removes a user's access")
+@is_owner()
+async def unwhitelist(interaction: discord.Interaction, member: discord.Member):
+    n = await db.delete_user_keys(member.id)
+    if n > 0: await interaction.response.send_message(f"✅ Unwhitelisted {member.mention}.", ephemeral=True)
+    else: await interaction.response.send_message("❌ User not found.", ephemeral=True)
+
+@bot.tree.command(name="blacklist", description="Blacklists the user")
+@is_owner()
+async def blacklist(interaction: discord.Interaction, member: discord.Member):
+    n = await db.blacklist_user(member.id)
+    if n > 0: await interaction.response.send_message(f"✅ Blacklisted {member.mention}.", ephemeral=True)
+    else: await interaction.response.send_message("❌ User not found.", ephemeral=True)
+
+@bot.tree.command(name="compensate", description="Adds days to everyone")
+@is_owner()
+async def compensate(interaction: discord.Interaction, days: int):
+    await interaction.response.defer(ephemeral=True)
+    conn = sqlite3.connect(db.DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (days * 86400,))
+    conn.commit()
+    n = c.rowcount
+    conn.close()
+    await interaction.followup.send(f"✅ Compensated {n} users by {days} days.", ephemeral=True)
+
+@bot.tree.command(name="force-resethwid", description="Resets the HWID of a user")
+@is_owner()
+async def force_resethwid(interaction: discord.Interaction, member: discord.Member):
+    ok = await db.reset_hwid(member.id)
+    if ok: await interaction.response.send_message(f"✅ HWID forcefully reset for {member.mention}.", ephemeral=True)
+    else: await interaction.response.send_message("❌ User not found.", ephemeral=True)
+
+@bot.tree.command(name="stats", description="Shows panel statistics")
+@is_owner()
+async def stats(interaction: discord.Interaction):
+    total, active, blacklisted = await db.get_all_stats()
+    is_paused = await db.get_setting("system_paused", "0")
+    embed = discord.Embed(title="📊 Project Stats", color=discord.Color.green())
+    embed.add_field(name="Total Users", value=str(total))
+    embed.add_field(name="Active", value=str(active))
+    embed.add_field(name="Blacklisted", value=str(blacklisted))
+    embed.add_field(name="System Status", value="⏸️ Paused" if is_paused == "1" else "▶️ Running")
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==========================================
+# STARTUP
+# ==========================================
+@bot.event
+async def on_ready():
+    print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    bot.add_view(PaidPanelView())
+    try:
+        synced = await bot.tree.sync()
+        print(f"[bot] synced {len(synced)} slash commands")
+    except Exception as e:
+        print(f"[bot] sync failed: {e}")
+
+async def main():
+    if not DISCORD_TOKEN:
+        raise SystemExit("Missing DISCORD_TOKEN environment variable")
+        
+    # Start Render Web Server
     await start_web_server()
     
-    # 2. Start the Discord Bot
+    # Start Discord Bot
     try:
-        await client.start(TOKEN)
+        await bot.start(DISCORD_TOKEN)
     except KeyboardInterrupt:
         pass
     finally:
-        await client.close()
+        await bot.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
