@@ -68,19 +68,20 @@ async def handle_load(request: web.Request) -> web.Response:
         "seconds_left": seconds_left,
     })
 
-async def handle_paid_loader(request: web.Request) -> web.Response:
+async def handle_loader(request: web.Request) -> web.Response:
+    if request.headers.get("X-Keyhub-Secret") != API_SECRET:
+        return web.Response(text="403 Forbidden: Unauthorized", status=403)
     try:
-        with open("paid_loader.lua", "r") as f:
+        with open("loader.lua", "r") as f:
             return web.Response(text=f.read(), content_type="text/plain")
     except FileNotFoundError:
-        return web.Response(text="-- paid loader missing.", status=404)
+        return web.Response(text="-- loader missing.", status=404)
 
 async def start_server():
     await db.init_db()
     app = web.Application()
-    
     app.router.add_post("/load", handle_load)
-    app.router.add_get("/paid_loader", handle_paid_loader)
+    app.router.add_get("/loader", handle_loader)
     
     runner = web.AppRunner(app)
     await runner.setup()
