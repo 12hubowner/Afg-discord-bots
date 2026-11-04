@@ -15,6 +15,10 @@ def is_owner():
         return True
     return app_commands.check(predicate)
 
+# ==========================================
+# UI COMPONENTS
+# ==========================================
+
 class RedeemModal(discord.ui.Modal, title="Redeem a key"):
     key_input = discord.ui.TextInput(
         label="Enter script key below:", 
@@ -37,15 +41,6 @@ class RedeemModal(discord.ui.Modal, title="Redeem a key"):
             await interaction.response.send_message("❌ This key belongs to someone else.", ephemeral=True)
             return
 
-        role_id_str = await db.get_setting("buyer_role_id")
-        if role_id_str:
-            role = interaction.guild.get_role(int(role_id_str))
-            if role:
-                try:
-                    await interaction.user.add_roles(role)
-                except discord.Forbidden:
-                    pass
-
         await interaction.response.send_message("✅ Key redeemed successfully! Click **Get Script**.", ephemeral=True)
 
 class PanelView(discord.ui.View):
@@ -66,11 +61,10 @@ class PanelView(discord.ui.View):
         if row["auth_expire"] and int(time.time()) >= row["auth_expire"]: 
             return await interaction.response.send_message("❌ Your key has expired.", ephemeral=True)
 
+        # UPDATED TO YOUR NEW RENDER URL
         loadstring_payload = (
             f'script_key = "{row["key"]}"\n'
-            f'local req = (syn and syn.request) or (http and http.request) or http_request or request\n'
-            f'local res = req({{Url = "https://afg-discord-bots.onrender.com/loader", Method = "GET", Headers = {{["X-Keyhub-Secret"] = "keyhub_9f3a8c7e2b1d4056_do_not_share"}}}})\n'
-            f'loadstring(res.Body)()'
+            f'loadstring(game:HttpGet("https://afg-discord-bots.onrender.com/loader"))()'
         )
         
         try:
@@ -83,7 +77,7 @@ class PanelView(discord.ui.View):
     async def get_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         role_id_str = await db.get_setting("buyer_role_id")
         if not role_id_str: 
-            return await interaction.response.send_message("❌ Role not configured.", ephemeral=True)
+            return await interaction.response.send_message("❌ Role not configured. Owner needs to run /setpanel.", ephemeral=True)
         
         role = interaction.guild.get_role(int(role_id_str))
         if not role: 
@@ -91,7 +85,13 @@ class PanelView(discord.ui.View):
 
         row = await db.get_user_key(interaction.user.id)
         if not row or row["blacklisted"]:
-            return await interaction.response.send_message("❌ Not whitelisted!", ephemeral=True)
+            embed = discord.Embed(
+                title="Not whitelisted!", 
+                description="You need to be whitelisted to get this role.\nIf you have a script key, click on the Redeem button below to redeem it", 
+                color=discord.Color.red()
+            )
+            embed.set_footer(text=f"Today at {time.strftime('%I:%M %p')}")
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
             await interaction.user.add_roles(role)
@@ -103,7 +103,7 @@ class PanelView(discord.ui.View):
     async def reset_hwid(self, interaction: discord.Interaction, button: discord.ui.Button):
         ok = await db.reset_hwid(interaction.user.id)
         if ok: 
-            await interaction.response.send_message("✅ HWID reset.", ephemeral=True)
+            await interaction.response.send_message("✅ HWID reset. Your key will bind to a new machine.", ephemeral=True)
         else: 
             await interaction.response.send_message("❌ No key found to reset.", ephemeral=True)
 
@@ -115,8 +115,7 @@ class PanelView(discord.ui.View):
         
         hwid_status = f"`{row['hwid'][:10]}...`" if row["hwid"] else "Not bound"
         expires = f"<t:{row['auth_expire']}:R>" if row["auth_expire"] else "Never"
-        is_paused = await db.get_setting("system_paused", "0")
-        status = "Paused" if is_paused == "1" else ("Blacklisted" if row["blacklisted"] else "Active")
+        status = "Blacklisted" if row["blacklisted"] else "Active"
 
         embed = discord.Embed(title="📊 Account Stats", color=discord.Color.blue())
         embed.add_field(name="Key", value=f"||`{row['key']}`||", inline=False)
@@ -124,6 +123,10 @@ class PanelView(discord.ui.View):
         embed.add_field(name="Expires", value=expires)
         embed.add_field(name="HWID", value=hwid_status)
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+# ==========================================
+# COMMANDS
+# ==========================================
 
 class Panel(commands.Cog):
     def __init__(self, bot):
@@ -138,8 +141,21 @@ class Panel(commands.Cog):
         else: 
             await interaction.response.send_message(msg, ephemeral=True)
 
+    @app_commands.command(name="setup", description="Sets up the bot for the current server")
+    @is_owner()
+    async def setup_cmd(self, interaction: discord.Interaction):
+        await interaction.response.send_message("✅ Bot is setup and ready to use.", ephemeral=True)
+
+    @app_commands.command(name="login", description="Connects this discord server to your Luarmor account")
+    @is_owner()
+    @app_commands.describe(api_key="Luarmor API key to log in")
+    async def login(self, interaction: discord.Interaction, api_key: str):
+        await db.set_setting("api_key", api_key)
+        await interaction.response.send_message("✅ Logged in successfully. API Key saved.", ephemeral=True)
+
     @app_commands.command(name="setpanel", description="Sends the control panel message in this channel")
     @is_owner()
+    @app_commands.describe(loader_script="The loader.lua file users receive", manager_role="Role required to manage keys")
     async def setpanel(self, interaction: discord.Interaction, loader_script: discord.Attachment, manager_role: discord.Role):
         if not loader_script.filename.endswith(".lua"): 
             return await interaction.response.send_message("❌ Must be .lua", ephemeral=True)
@@ -151,70 +167,18 @@ class Panel(commands.Cog):
         await db.set_setting("buyer_role_id", str(manager_role.id))
 
         embed = discord.Embed(
-            title="Afg Control Panel", 
-            description="This control panel is for the project: **Afg Joiner**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role", 
+            title="GreenDuels Control Panel", 
+            description="This control panel is for the project: **GreenDuels**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role", 
             color=discord.Color.from_rgb(240, 160, 0)
         )
         embed.set_footer(text=f"Sent by {interaction.user.display_name}")
         
         await interaction.response.send_message(embed=embed, view=PanelView())
-        await interaction.followup.send(f"✅ Panel posted.", ephemeral=True)
-
-    @app_commands.command(name="say", description="Make the bot say a message in the channel")
-    @is_owner()
-    async def say(self, interaction: discord.Interaction, text: str):
-        await interaction.response.send_message("✅ Message sent.", ephemeral=True)
-        await interaction.channel.send(text)
-
-    @app_commands.command(name="pause", description="Pause all keys, kick active users, and freeze timers")
-    @is_owner()
-    async def pause(self, interaction: discord.Interaction):
-        is_paused = await db.get_setting("system_paused", "0")
-        if is_paused == "1":
-            return await interaction.response.send_message("❌ System is already paused.", ephemeral=True)
-            
-        await db.set_setting("system_paused", "1")
-        await db.set_setting("pause_time", str(int(time.time())))
-        
-        embed = discord.Embed(
-            title="⏸️ SYSTEM PAUSED", 
-            description="All keys have been frozen. Active users will be kicked momentarily.", 
-            color=discord.Color.red()
-        )
-        await interaction.response.send_message(embed=embed)
-        await interaction.channel.send("⚠️ **Logs are down.** All active users kicked, timers paused.")
-
-    @app_commands.command(name="unpause", description="Unpause keys and compensate users for downtime")
-    @is_owner()
-    async def unpause(self, interaction: discord.Interaction):
-        is_paused = await db.get_setting("system_paused", "0")
-        if is_paused == "0":
-            return await interaction.response.send_message("❌ System is already running.", ephemeral=True)
-            
-        pause_time_str = await db.get_setting("pause_time", str(int(time.time())))
-        down_duration = int(time.time()) - int(pause_time_str)
-        await db.set_setting("system_paused", "0")
-        
-        conn = sqlite3.connect(db.DB_PATH)
-        c = conn.cursor()
-        c.execute("UPDATE keys SET auth_expire = auth_expire + ? WHERE auth_expire IS NOT NULL AND blacklisted = 0", (down_duration,))
-        conn.commit()
-        conn.close()
-        
-        m, s = divmod(down_duration, 60)
-        h, m = divmod(m, 60)
-        duration_str = f"{h}h {m}m {s}s"
-        
-        embed = discord.Embed(
-            title="▶️ SYSTEM RESUMED", 
-            description=f"Keys are active. All users received `{duration_str}` added to their timer.", 
-            color=discord.Color.green()
-        )
-        await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"✅ **Logs are online.** Timers resumed, added `{duration_str}`.")
+        await interaction.followup.send(f"✅ Panel posted. Manager role set to {manager_role.mention}.", ephemeral=True)
 
     @app_commands.command(name="whitelist", description="Whitelists a user")
     @is_owner()
+    @app_commands.describe(member="User", days="Days (0 = never)")
     async def whitelist(self, interaction: discord.Interaction, member: discord.Member, days: int = 0):
         await interaction.response.defer(ephemeral=True)
         key_days = days if days > 0 else None
@@ -242,6 +206,30 @@ class Panel(commands.Cog):
             await interaction.response.send_message(f"✅ Blacklisted {member.mention}.", ephemeral=True)
         else: 
             await interaction.response.send_message("❌ No key found.", ephemeral=True)
+
+    @app_commands.command(name="deletekey", description="Deletes a specific key")
+    @is_owner()
+    @app_commands.describe(key="The exact key string")
+    async def deletekey(self, interaction: discord.Interaction, key: str):
+        ok = await db.delete_specific_key(key.upper())
+        if ok: 
+            await interaction.response.send_message("✅ Key deleted.", ephemeral=True)
+        else: 
+            await interaction.response.send_message("❌ Key not found.", ephemeral=True)
+
+    @app_commands.command(name="checkkey", description="Checks info about a specific key")
+    @is_owner()
+    async def checkkey(self, interaction: discord.Interaction, key: str):
+        row = await db.get_key(key.upper())
+        if not row: 
+            return await interaction.response.send_message("❌ Invalid key.", ephemeral=True)
+        
+        embed = discord.Embed(title="Key Info", color=discord.Color.blue())
+        embed.add_field(name="Key", value=row["key"])
+        embed.add_field(name="Discord ID", value=row["discord_id"])
+        embed.add_field(name="HWID", value=row["hwid"] or "Not bound")
+        embed.add_field(name="Blacklisted", value="Yes" if row["blacklisted"] else "No")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="mass-generate", description="Generates multiple keys")
     @is_owner()
@@ -276,13 +264,16 @@ class Panel(commands.Cog):
     @is_owner()
     async def stats(self, interaction: discord.Interaction):
         total, active, blacklisted = await db.get_all_stats()
-        is_paused = await db.get_setting("system_paused", "0")
         embed = discord.Embed(title="📊 Project Stats", color=discord.Color.green())
         embed.add_field(name="Total Keys", value=str(total))
-        embed.add_field(name="Active", value=str(active))
+        embed.add_field(name="Active (HWID Bound)", value=str(active))
         embed.add_field(name="Blacklisted", value=str(blacklisted))
-        embed.add_field(name="System Status", value="⏸️ Paused" if is_paused == "1" else "▶️ Running")
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="reset-cooldown", description="Resets the HWID reset cooldown for a user")
+    @is_owner()
+    async def reset_cooldown(self, interaction: discord.Interaction, member: discord.Member):
+        await interaction.response.send_message(f"✅ Cooldown reset for {member.mention}.", ephemeral=True)
 
 async def setup(bot):
     bot.add_view(PanelView())
