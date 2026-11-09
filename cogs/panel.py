@@ -167,8 +167,8 @@ class Panel(commands.Cog):
         await db.set_setting("buyer_role_id", str(manager_role.id))
 
         embed = discord.Embed(
-            title="GreenDuels Control Panel", 
-            description="This control panel is for the project: **GreenDuels**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role", 
+            title="Afg Control Panel", 
+            description="This control panel is for the project: **Afg Joiner**\nIf you're a buyer, click on the buttons below to redeem your key, get the script or get your role", 
             color=discord.Color.from_rgb(240, 160, 0)
         )
         embed.set_footer(text=f"Sent by {interaction.user.display_name}")
